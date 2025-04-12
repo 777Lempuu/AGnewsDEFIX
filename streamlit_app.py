@@ -20,25 +20,29 @@ def load_model():
     try:
         device = torch.device('cpu')
         
-        # Add all required safe globals (for HuggingFace components)
-        from transformers.models.bert.tokenization_bert_fast import BertTokenizerFast
-        from tokenizers import Tokenizer
-        torch.serialization.add_safe_globals([BertTokenizerFast, Tokenizer])
-        
-        # Load with weights_only=False since we've added safe globals
-        model_data = torch.load('AG_DeFix.pt', 
-                             map_location=device,
-                             weights_only=False)  # Now safe because we've allowlisted classes
-        
-        # Recreate model
+        # Initialize model architecture
         model = AutoModelForSequenceClassification.from_pretrained(
             "google/bert_uncased_L-2_H-128_A-2",
             num_labels=4
         )
-        model.load_state_dict(model_data['model_state_dict'])
+        
+        # Load just the weights (what you actually have)
+        weights = torch.load('AG_DeFix.pt', map_location=device)
+        
+        # Create a state_dict that matches the model's expectations
+        state_dict = {
+            'bert.embeddings.word_embeddings.weight': weights['embedding.weight'],
+            'classifier.weight': weights['fc.weight'],
+            'classifier.bias': weights['fc.bias']
+        }
+        
+        # Load the modified state_dict
+        model.load_state_dict(state_dict, strict=False)
         model.to(device).eval()
         
-        tokenizer = model_data['tokenizer']
+        # Initialize tokenizer separately
+        tokenizer = AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2")
+        
         st.success("✅ Model loaded successfully!")
         return model, tokenizer
         
