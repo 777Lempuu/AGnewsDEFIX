@@ -1,22 +1,37 @@
 import streamlit as st
 import torch
 import torch.nn as nn
-from transformers import AutoTokenizer
+import re
 
-# ------------------- Model Definition -------------------
-
-class SimpleNewsClassifier(nn.Module):
-    def __init__(self, vocab_size=30522, embed_dim=128, num_classes=4):
-        super(SimpleNewsClassifier, self).__init__()
+# Recovered architecture
+class RecoveredNewsClassifier(nn.Module):
+    def __init__(self, vocab_size=65045, embed_dim=64, num_classes=4):
+        super(RecoveredNewsClassifier, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.fc = nn.Linear(embed_dim, num_classes)
 
     def forward(self, input_ids):
         embeds = self.embedding(input_ids)
-        pooled = embeds.mean(dim=1)  # simple average pooling
+        pooled = embeds.mean(dim=1)
         return self.fc(pooled)
 
-# ------------------- Constants -------------------
+# Simple tokenizer using word to index mapping
+def basic_tokenizer(text, vocab, max_len=50):
+    text = re.sub(r'[^\w\s]', '', text.lower())
+    tokens = text.split()
+    ids = [vocab.get(tok, vocab['[UNK]']) for tok in tokens[:max_len]]
+    if len(ids) < max_len:
+        ids += [vocab['[PAD]']] * (max_len - len(ids))
+    return torch.tensor([ids])
+
+# Dummy vocab (you can replace this with a saved one if available)
+def create_dummy_vocab(vocab_size):
+    vocab = {f"word{i}": i for i in range(4, vocab_size)}
+    vocab['[PAD]'] = 0
+    vocab['[UNK]'] = 1
+    vocab['[CLS]'] = 2
+    vocab['[SEP]'] = 3
+    return vocab
 
 CLASS_LABELS = {
     0: "World 🌍",
@@ -25,64 +40,31 @@ CLASS_LABELS = {
     3: "Sci/Tech 🔬"
 }
 
-# ------------------- Streamlit Setup -------------------
-
-st.set_page_config(page_title="AG News - DeFix Model", layout="wide")
-st.title("📰 AG News Classifier (DeFix Model)")
+st.title("📰 AG News Classifier (DeFix .pt)")
 
 @st.cache_resource
-def load_model_and_tokenizer():
-    try:
-        model = SimpleNewsClassifier()
-        state_dict = torch.load("AG_DeFix.pt", map_location="cpu")
-        model.load_state_dict(state_dict)
-        model.eval()
+def load_model():
+    model = RecoveredNewsClassifier()
+    model.load_state_dict(torch.load("AG_DeFix.pt", map_location='cpu'))
+    model.eval()
+    return model
 
-        tokenizer = AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2")
-        st.success("✅ Model and tokenizer loaded!")
-        return model, tokenizer
-    except Exception as e:
-        st.error(f"❌ Failed to load model/tokenizer: {e}")
-        return None, None
+model = load_model()
+vocab = create_dummy_vocab(65045)
 
-model, tokenizer = load_model_and_tokenizer()
+text = st.text_area("Enter a news headline:", height=150)
 
-# ------------------- Prediction Function -------------------
-
-def predict(text):
-    if not model or not tokenizer:
-        return None, None
-
-    try:
-        encoded = tokenizer(
-            text,
-            return_tensors='pt',
-            padding='max_length',
-            max_length=64,
-            truncation=True
-        )
-        input_ids = encoded['input_ids']
+if st.button("Classify"):
+    if not text.strip():
+        st.warning("Please enter some text.")
+    else:
+        input_ids = basic_tokenizer(text, vocab)
         with torch.no_grad():
             logits = model(input_ids)
             probs = torch.softmax(logits, dim=1)
             pred = torch.argmax(probs, dim=1).item()
-            conf = probs[0][pred].item()
-        return CLASS_LABELS[pred], conf
-    except Exception as e:
-        st.error(f"Prediction error: {e}")
-        return None, None
+            confidence = probs[0][pred].item()
+        st.success(f"Prediction: **{CLASS_LABELS[pred]}**")
+        st.metric("Confidence", f"{confidence:.2%}")
 
-# ------------------- UI -------------------
-
-st.subheader("🔮 Enter News Text")
-user_input = st.text_area("News Headline or Snippet", height=150)
-
-if st.button("Predict") and user_input:
-    with st.spinner("Classifying..."):
-        label, confidence = predict(user_input)
-    if label:
-        st.success(f"Predicted: **{label}**")
-        st.metric(label="Confidence", value=f"{confidence:.2%}")
-
-st.caption("Built with Streamlit & PyTorch 💡")
 
