@@ -1,115 +1,88 @@
 import streamlit as st
-import pandas as pd
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch.nn as nn
+from transformers import AutoTokenizer
 
-# Configure page
-st.set_page_config(page_title="AG News Classifier", layout="wide")
-st.title("📰 AG News Headline Classifier")
+# ------------------- Model Definition -------------------
 
-# Class labels mapping
+class SimpleNewsClassifier(nn.Module):
+    def __init__(self, vocab_size=30522, embed_dim=128, num_classes=4):
+        super(SimpleNewsClassifier, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        self.fc = nn.Linear(embed_dim, num_classes)
+
+    def forward(self, input_ids):
+        embeds = self.embedding(input_ids)
+        pooled = embeds.mean(dim=1)  # simple average pooling
+        return self.fc(pooled)
+
+# ------------------- Constants -------------------
+
 CLASS_LABELS = {
-    0: "World",
-    1: "Sports",
-    2: "Business",
-    3: "Sci/Tech"
+    0: "World 🌍",
+    1: "Sports ⚽",
+    2: "Business 💼",
+    3: "Sci/Tech 🔬"
 }
 
+# ------------------- Streamlit Setup -------------------
+
+st.set_page_config(page_title="AG News - DeFix Model", layout="wide")
+st.title("📰 AG News Classifier (DeFix Model)")
+
 @st.cache_resource
-def load_model():
+def load_model_and_tokenizer():
     try:
-        device = torch.device('cpu')
-        
-        # Add required safe globals if loading full objects
-        from transformers.models.bert.tokenization_bert_fast import BertTokenizerFast
-        from tokenizers import Tokenizer
-        torch.serialization.add_safe_globals([BertTokenizerFast, Tokenizer])
-        
-        # Load the checkpoint (handle both structured and raw state_dict)
-        checkpoint = torch.load('AG_DeFix.pt', map_location=device, weights_only=False)
+        model = SimpleNewsClassifier()
+        state_dict = torch.load("AG_DeFix.pt", map_location="cpu")
+        model.load_state_dict(state_dict)
+        model.eval()
 
-        # Recreate the model architecture
-        model = AutoModelForSequenceClassification.from_pretrained(
-            "google/bert_uncased_L-2_H-128_A-2",
-            num_labels=4
-        )
-        
-        # Try loading from 'model_state_dict' if available, else load raw
-        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-            tokenizer = checkpoint.get('tokenizer', AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2"))
-        else:
-            model.load_state_dict(checkpoint)
-            tokenizer = AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2")
-
-        model.to(device).eval()
-        st.success("✅ Model loaded successfully!")
+        tokenizer = AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2")
+        st.success("✅ Model and tokenizer loaded!")
         return model, tokenizer
-        
     except Exception as e:
-        st.error(f"❌ Model loading failed: {str(e)}")
+        st.error(f"❌ Failed to load model/tokenizer: {e}")
         return None, None
 
-# Load model
-model, tokenizer = load_model()
+model, tokenizer = load_model_and_tokenizer()
+
+# ------------------- Prediction Function -------------------
 
 def predict(text):
-    """Make prediction with proper error handling"""
     if not model or not tokenizer:
         return None, None
-        
+
     try:
-        inputs = tokenizer(
+        encoded = tokenizer(
             text,
-            truncation=True,
+            return_tensors='pt',
             padding='max_length',
-            max_length=128,
-            return_tensors="pt"
+            max_length=64,
+            truncation=True
         )
+        input_ids = encoded['input_ids']
         with torch.no_grad():
-            outputs = model(**inputs).logits
-        probs = torch.nn.functional.softmax(outputs, dim=1)
-        pred_class = torch.argmax(probs).item()
-        confidence = torch.max(probs).item()
-        return CLASS_LABELS[pred_class], confidence
+            logits = model(input_ids)
+            probs = torch.softmax(logits, dim=1)
+            pred = torch.argmax(probs, dim=1).item()
+            conf = probs[0][pred].item()
+        return CLASS_LABELS[pred], conf
     except Exception as e:
-        st.error(f"Prediction error: {str(e)}")
+        st.error(f"Prediction error: {e}")
         return None, None
 
-# --- UI Components ---
+# ------------------- UI -------------------
 
-@st.cache_data
-def load_sample_data():
-    url = "https://drive.google.com/uc?id=1xr-eyagU6GeZlYpn8qGIuMSdK5WFUV5x"
-    return pd.read_csv(url).dropna()
-
-if st.checkbox("Show sample dataset"):
-    df = load_sample_data()
-    num_rows = st.slider("Rows to display", 5, 100, 10)
-    st.dataframe(df.head(num_rows))
-
-# Main prediction interface
-st.subheader("🔮 News Classifier")
-user_input = st.text_area("Enter news text:", height=150)
+st.subheader("🔮 Enter News Text")
+user_input = st.text_area("News Headline or Snippet", height=150)
 
 if st.button("Predict") and user_input:
-    with st.spinner("Analyzing..."):
-        category, confidence = predict(user_input)
-        
-    if category:
-        st.success(f"Predicted Category: **{category}**")
-        st.metric("Confidence", f"{confidence:.1%}")
-        
-        with st.expander("What does this mean?"):
-            st.markdown(f"""
-            The model believes this text belongs to **{category}** news with {confidence:.1%} confidence.
-            
-            * 0: World 🌍
-            * 1: Sports ⚽
-            * 2: Business 💼  
-            * 3: Sci/Tech 🔬
-            """)
+    with st.spinner("Classifying..."):
+        label, confidence = predict(user_input)
+    if label:
+        st.success(f"Predicted: **{label}**")
+        st.metric(label="Confidence", value=f"{confidence:.2%}")
 
-# Footer
-st.markdown("---")
-st.caption("Built with 🤗 Transformers and Streamlit")
+st.caption("Built with Streamlit & PyTorch 💡")
+
