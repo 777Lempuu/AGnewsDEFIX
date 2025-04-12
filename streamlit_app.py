@@ -20,29 +20,29 @@ def load_model():
     try:
         device = torch.device('cpu')
         
-        # Initialize model architecture
+        # Add required safe globals if loading full objects
+        from transformers.models.bert.tokenization_bert_fast import BertTokenizerFast
+        from tokenizers import Tokenizer
+        torch.serialization.add_safe_globals([BertTokenizerFast, Tokenizer])
+        
+        # Load the checkpoint (handle both structured and raw state_dict)
+        checkpoint = torch.load('AG_DeFix.pt', map_location=device, weights_only=False)
+
+        # Recreate the model architecture
         model = AutoModelForSequenceClassification.from_pretrained(
             "google/bert_uncased_L-2_H-128_A-2",
             num_labels=4
         )
         
-        # Load just the weights (what you actually have)
-        weights = torch.load('AG_DeFix.pt', map_location=device)
-        
-        # Create a state_dict that matches the model's expectations
-        state_dict = {
-            'bert.embeddings.word_embeddings.weight': weights['embedding.weight'],
-            'classifier.weight': weights['fc.weight'],
-            'classifier.bias': weights['fc.bias']
-        }
-        
-        # Load the modified state_dict
-        model.load_state_dict(state_dict, strict=False)
+        # Try loading from 'model_state_dict' if available, else load raw
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            model.load_state_dict(checkpoint['model_state_dict'])
+            tokenizer = checkpoint.get('tokenizer', AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2"))
+        else:
+            model.load_state_dict(checkpoint)
+            tokenizer = AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2")
+
         model.to(device).eval()
-        
-        # Initialize tokenizer separately
-        tokenizer = AutoTokenizer.from_pretrained("google/bert_uncased_L-2_H-128_A-2")
-        
         st.success("✅ Model loaded successfully!")
         return model, tokenizer
         
@@ -78,7 +78,6 @@ def predict(text):
 
 # --- UI Components ---
 
-# Dataset preview (optional)
 @st.cache_data
 def load_sample_data():
     url = "https://drive.google.com/uc?id=1xr-eyagU6GeZlYpn8qGIuMSdK5WFUV5x"
@@ -101,7 +100,6 @@ if st.button("Predict") and user_input:
         st.success(f"Predicted Category: **{category}**")
         st.metric("Confidence", f"{confidence:.1%}")
         
-        # Optional: Show explanation
         with st.expander("What does this mean?"):
             st.markdown(f"""
             The model believes this text belongs to **{category}** news with {confidence:.1%} confidence.
