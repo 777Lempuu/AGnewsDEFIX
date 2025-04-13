@@ -8,7 +8,7 @@ import os
 import pickle
 
 # Set up the app
-st.set_page_config(page_title="AG News Classifier", page_icon="📰")
+st.set_page_config(page_title="AG News Classifier via SAFESTUDENT", page_icon="📰")
 st.title("AG News Classifier")
 st.write("Classify news articles into World, Sports, Business, or Sci/Tech categories")
 
