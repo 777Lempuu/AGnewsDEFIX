@@ -5,16 +5,17 @@ import numpy as np
 import pandas as pd
 import gdown
 import os
-from collections import defaultdict
 import pickle
+from collections import defaultdict
 
 # Set up the app
 st.set_page_config(page_title="AG News Classifier", page_icon="📰")
 st.title("AG News Classifier")
 st.write("Classify news articles into World, Sports, Business, or Sci/Tech categories")
 
-# Configuration - Updated with your Google Drive link
+# Configuration - Updated with your actual files
 MODEL_URL = "https://drive.google.com/uc?id=1GFir7sAkaxLXLeCsPpBE_UBb8wfJlnyX"
+VOCAB_URL = "https://drive.google.com/uc?id=1XGpebvsOQOxuZLZR3Vf4giZ-rX_8dRSN"
 MODEL_PATH = "AG_SafeStudent.pt"
 VOCAB_PATH = "ag_news_vocab.pkl"
 
@@ -30,56 +31,53 @@ class TextClassifier(nn.Module):
         pooled = emb.mean(dim=1)
         return self.fc(pooled)
 
-# File download function with progress bar
+# File download function with progress
 @st.cache_resource
 def download_file(url, output):
     if not os.path.exists(output):
         try:
             with st.spinner(f"Downloading {output}..."):
                 gdown.download(url, output, quiet=False)
-            st.success(f"Downloaded {output}")
             return True
         except Exception as e:
             st.error(f"Failed to download {output}: {e}")
             return False
     return True
 
-# Initialize vocabulary (fallback version)
+# Load vocabulary - now using your actual vocab file
 @st.cache_resource
 def load_vocabulary():
-    # Try to load vocabulary file if it exists
-    if os.path.exists(VOCAB_PATH):
-        try:
-            with open(VOCAB_PATH, 'rb') as f:
-                return pickle.load(f)
-        except:
-            st.warning("Failed to load vocabulary file, using fallback")
-    
-    # Fallback minimal vocabulary (should replace with your actual vocab)
-    st.warning("Using fallback vocabulary - for best results, provide a vocabulary file")
-    vocab = defaultdict(lambda: 1)  # Default to <unk>
-    vocab.update({
-        "<pad>": 0,
-        "<unk>": 1,
-        # Add some common words that might appear in AG News
-        "the": 2, "of": 3, "to": 4, "and": 5, "in": 6, "a": 7, "for": 8,
-        "on": 9, "is": 10, "that": 11, "by": 12, "this": 13, "with": 14,
-        "as": 15, "at": 16, "from": 17, "be": 18, "are": 19, "has": 20
-    })
-    return vocab
-
-# Load the model
-@st.cache_resource
-def load_model():
-    if not download_file(MODEL_URL, MODEL_PATH):
-        st.error("Model download failed - cannot continue")
+    # Download vocabulary file if needed
+    if not download_file(VOCAB_URL, VOCAB_PATH):
+        st.error("Failed to download vocabulary file")
         return None
     
     try:
-        vocab = load_vocabulary()
+        with open(VOCAB_PATH, 'rb') as f:
+            vocab = pickle.load(f)
+        st.success(f"Loaded vocabulary with {len(vocab)} words")
+        return vocab
+    except Exception as e:
+        st.error(f"Vocabulary loading failed: {e}")
+        return None
+
+# Load the model with proper vocabulary
+@st.cache_resource
+def load_model():
+    # First download the model
+    if not download_file(MODEL_URL, MODEL_PATH):
+        return None
+    
+    # Load vocabulary first to get correct size
+    vocab = load_vocabulary()
+    if vocab is None:
+        return None
+    
+    try:
         model = TextClassifier(len(vocab), embed_dim=64, num_classes=4)
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=torch.device('cpu')))
+        model.load_state_dict(torch.load(MODEL_PATH, map_location='cpu'))
         model.eval()
+        st.success("Model loaded successfully")
         return model
     except Exception as e:
         st.error(f"Model loading failed: {str(e)}")
@@ -94,7 +92,7 @@ def tokenize(text):
     return text.lower().split()
 
 def text_pipeline(text):
-    return [vocab[tok] for tok in tokenize(text)]
+    return [vocab.get(tok, vocab["<unk>"]) for tok in tokenize(text)]
 
 def predict(text):
     if model is None:
@@ -103,7 +101,7 @@ def predict(text):
     try:
         # Process input text
         tokens = text_pipeline(text)
-        if not tokens:  # Handle empty input
+        if not tokens:
             return "Invalid input", []
             
         tokens_tensor = torch.tensor(tokens, dtype=torch.long).unsqueeze(0)
@@ -126,42 +124,68 @@ user_input = st.text_area("Enter news text to classify:",
 
 if st.button("Classify"):
     if user_input.strip():
-        prediction, probabilities = predict(user_input)
-        
-        if prediction == "Error":
-            st.error("Classification failed")
-        else:
-            st.subheader("Prediction Result")
-            st.success(f"**Category:** {prediction}")
+        with st.spinner("Analyzing..."):
+            prediction, probabilities = predict(user_input)
             
-            # Display confidence scores
-            st.subheader("Confidence Scores")
-            classes = ['World', 'Sports', 'Business', 'Sci/Tech']
-            prob_df = pd.DataFrame({
-                'Category': classes,
-                'Probability': probabilities
-            })
-            
-            # Show both bar chart and table
-            st.bar_chart(prob_df.set_index('Category'))
-            st.table(prob_df.style.format({'Probability': '{:.2%}'}))
+            if prediction == "Error":
+                st.error("Classification failed")
+            else:
+                st.subheader("Prediction Result")
+                st.success(f"**Category:** {prediction}")
+                
+                st.subheader("Confidence Scores")
+                classes = ['World', 'Sports', 'Business', 'Sci/Tech']
+                prob_df = pd.DataFrame({
+                    'Category': classes,
+                    'Probability': probabilities
+                })
+                
+                # Display both visual and numeric results
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.bar_chart(prob_df.set_index('Category'))
+                with col2:
+                    st.table(prob_df.style.format({'Probability': '{:.2%}'}).highlight_max(axis=0))
     else:
         st.warning("Please enter some text to classify")
 
 # App information
 st.sidebar.markdown("""
 ### About this app
-This app uses a SafeStudent-trained model to classify news articles into 4 categories:
-- **World** - International news and events
-- **Sports** - Sports news and competitions
-- **Business** - Business and financial news
-- **Sci/Tech** - Science and technology news
+This app classifies news articles into 4 categories using a SafeStudent-trained model.
 
-The model was trained on the AG News dataset with knowledge distillation.
+**Model Info:**
+- Trained on AG News dataset
+- Vocabulary size: 158,735 words
+- Embedding dimension: 64
+
+**Categories:**
+- World 🌍
+- Sports ⚽
+- Business 💼
+- Sci/Tech 🔬
 """)
 
+# System status
+st.sidebar.markdown("""
+### System Status
+""")
 if model is None:
-    st.error("⚠️ Model failed to load. Please check:")
-    st.error("- Internet connection")
-    st.error("- Google Drive link accessibility")
-    st.error("- File permissions")
+    st.sidebar.error("❌ Model not loaded")
+else:
+    st.sidebar.success("✅ Model loaded")
+    
+if vocab is None:
+    st.sidebar.error("❌ Vocabulary not loaded")
+else:
+    st.sidebar.success(f"✅ Vocabulary loaded ({len(vocab)} words)")
+
+# Requirements instructions
+st.sidebar.markdown("""
+### Requirements
+```python
+streamlit
+torch
+numpy
+pandas
+gdown
