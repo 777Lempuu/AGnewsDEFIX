@@ -183,7 +183,7 @@ else:
 # Requirements instructions
 st.sidebar.markdown("""
 ### Requirements
-```python
+```text
 streamlit
 torch
 numpy
