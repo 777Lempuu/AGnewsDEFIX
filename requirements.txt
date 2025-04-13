@@ -1,8 +1,5 @@
 streamlit
 torch
-transformers
 numpy
 pandas
-matplotlib
-joblib
-nltk
+gdown
