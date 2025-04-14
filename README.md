@@ -1,4 +1,4 @@
-AG NEWS DEFIX
+AG NEWS SAFE
 ```
 ⬆️
 
